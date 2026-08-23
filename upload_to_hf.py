@@ -1,29 +1,60 @@
-from huggingface_hub import HfApi, login
+"""Upload an explicitly selected tokenizer artifact and metadata to Hugging Face."""
 
-print("=== Hugging Face Tokenizer Yükleme Aracı ===")
-print("Eğer Hugging Face'e giriş yapmadıysanız https://huggingface.co/settings/tokens adresinden bir WRITE (Yazma) yetkili 'Access Token' alıp buraya yapıştırın.")
-token = input("Hugging Face Access Token (Gizli görünmeyebilir, yapıştırıp Enter'a basın): ")
+from __future__ import annotations
 
-if token.strip():
-    login(token=token.strip())
+import argparse
+import os
+from pathlib import Path
 
-api = HfApi()
+from huggingface_hub import HfApi
 
-hf_username = input("Hugging Face Kullanıcı Adınız (Örn: cebrail): ")
-repo_name = input("Oluşturulacak Modelin Adı (Örn: turkish-bpe-tokenizer-128k): ")
 
-repo_id = f"{hf_username}/{repo_name}"
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo-id", required=True, help="Hugging Face model repo in owner/name form")
+    parser.add_argument("--tokenizer", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--readme", type=Path, default=Path("README.md"))
+    parser.add_argument("--private", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    return parser.parse_args()
 
-print(f"\n{repo_id} adlı depo (repo) oluşturuluyor...")
-api.create_repo(repo_id=repo_id, exist_ok=True, repo_type="model")
 
-print("Dosyalar yükleniyor (turkish_tokenizer.json, README.md, train_turkish_tokenizer.py)...")
-api.upload_folder(
-    folder_path=".", 
-    allow_patterns=["*.json", "*.py", "*.md"], 
-    repo_id=repo_id,
-    repo_type="model"
-)
+def main() -> int:
+    args = parse_args()
+    files = [args.tokenizer, args.manifest, args.readme]
+    missing = [str(path) for path in files if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Missing upload files: {', '.join(missing)}")
 
-print(f"\nHarika! Modeliniz Hugging Face'e başarıyla yüklendi 🚀")
-print(f"Buradan ulaşabilirsiniz: https://huggingface.co/{repo_id}")
+    upload_plan = [
+        (args.tokenizer, "tokenizer.json"),
+        (args.manifest, "training_manifest.json"),
+        (args.readme, "README.md"),
+    ]
+    if args.dry_run:
+        for source, destination in upload_plan:
+            print(f"{source} -> {args.repo_id}/{destination}")
+        return 0
+
+    api = HfApi(token=os.environ.get("HF_TOKEN"))
+    api.create_repo(
+        repo_id=args.repo_id,
+        repo_type="model",
+        private=args.private,
+        exist_ok=True,
+    )
+    for source, destination in upload_plan:
+        api.upload_file(
+            path_or_fileobj=str(source),
+            path_in_repo=destination,
+            repo_id=args.repo_id,
+            repo_type="model",
+        )
+    print(f"Uploaded {len(upload_plan)} explicit files to {args.repo_id}.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
