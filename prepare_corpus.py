@@ -13,9 +13,6 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Iterator
 
-from datasets import load_dataset
-from huggingface_hub import HfApi
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -38,13 +35,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def write_split(
-    documents: Iterator[dict[str, Any]], path: Path, count: int, text_column: str
+    documents: Iterator[dict[str, Any]], path: Path, count: int, text_column: str,
+    seen: set[str] | None = None,
 ) -> dict[str, Any]:
     temporary = path.with_suffix(path.suffix + ".tmp")
     digest = hashlib.sha256()
     written = 0
     characters = 0
     utf8_bytes = 0
+    seen = seen if seen is not None else set()
+    duplicates = 0
 
     with temporary.open("wb") as handle:
         while written < count:
@@ -57,6 +57,11 @@ def write_split(
             text = document.get(text_column)
             if not isinstance(text, str) or not text.strip():
                 continue
+            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            if text_hash in seen:
+                duplicates += 1
+                continue
+            seen.add(text_hash)
             line = (json.dumps({"text": text}, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
             handle.write(line)
             digest.update(line)
@@ -72,10 +77,14 @@ def write_split(
         "text_utf8_bytes": utf8_bytes,
         "file_bytes": path.stat().st_size,
         "sha256": digest.hexdigest(),
+        "exact_duplicates_skipped": duplicates,
     }
 
 
 def main() -> int:
+    from datasets import load_dataset
+    from huggingface_hub import HfApi
+
     args = parse_args()
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -105,9 +114,10 @@ def main() -> int:
     documents = iter(dataset)
 
     started = time.perf_counter()
-    train_stats = write_split(documents, paths["train"], args.train_docs, args.text_column)
+    seen: set[str] = set()
+    train_stats = write_split(documents, paths["train"], args.train_docs, args.text_column, seen)
     benchmark_stats = write_split(
-        documents, paths["benchmark"], args.benchmark_docs, args.text_column
+        documents, paths["benchmark"], args.benchmark_docs, args.text_column, seen
     )
     elapsed = time.perf_counter() - started
 
@@ -125,6 +135,7 @@ def main() -> int:
             "seed": args.seed,
             "shuffle_buffer_size": args.shuffle_buffer_size,
             "order": "deterministic streaming shuffle; train documents followed by held-out benchmark documents",
+            "deduplication": "exact UTF-8 text SHA-256, shared across train and benchmark",
         },
         "splits": {"train": train_stats, "benchmark": benchmark_stats},
         "elapsed_seconds": elapsed,
@@ -145,4 +156,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
