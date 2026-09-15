@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -20,6 +19,8 @@ from tokenizers.models import BPE
 from tokenizers.pre_tokenizers import ByteLevel
 from tokenizers.trainers import BpeTrainer
 
+from tokenizer_provenance import object_hash, reproducibility_inputs, sha256_file, verify_corpus
+
 
 SPECIAL_TOKENS = [
     "<|begin_of_sentence|>",
@@ -32,7 +33,7 @@ SPECIAL_TOKENS = [
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", type=Path, required=True, help="JSONL with a string 'text' field")
-    parser.add_argument("--corpus-manifest", type=Path)
+    parser.add_argument("--corpus-manifest", type=Path, required=True)
     parser.add_argument("--vocab-size", type=int, default=128000)
     parser.add_argument("--min-frequency", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=2000)
@@ -51,25 +52,6 @@ def parse_args() -> argparse.Namespace:
     if args.output is None:
         args.output = Path("artifacts") / f"turkish_bpe_{args.vocab_size}.json"
     return args
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def expected_corpus_hash(manifest_path: Path | None, corpus_path: Path) -> str | None:
-    if not manifest_path:
-        return None
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    for split in manifest.get("splits", {}).values():
-        if Path(split.get("path", "")).name == corpus_path.name:
-            value = split.get("sha256")
-            return value if isinstance(value, str) else None
-    raise ValueError(f"{corpus_path.name} is not recorded in {manifest_path}")
 
 
 class CorpusBatches:
@@ -91,7 +73,7 @@ class CorpusBatches:
                     record = json.loads(line)
                 except json.JSONDecodeError as error:
                     raise ValueError(f"Invalid JSON at {self.path}:{line_number}") from error
-                text = record.get("text")
+                text = record.get("text") if isinstance(record, dict) else None
                 if not isinstance(text, str):
                     raise ValueError(f"Missing string 'text' at {self.path}:{line_number}")
                 batch.append(text)
@@ -110,19 +92,19 @@ def main() -> int:
     corpus = args.corpus.resolve()
     output = args.output.resolve()
     manifest_output = output.with_suffix(".manifest.json")
+    if output.suffix != ".json" or output == manifest_output:
+        raise ValueError("Output must be a tokenizer .json file")
+    if {output, manifest_output} & {corpus, args.corpus_manifest.resolve()}:
+        raise ValueError("Output must not overwrite corpus inputs")
     if not corpus.is_file():
         raise FileNotFoundError(corpus)
     if (output.exists() or manifest_output.exists()) and not args.overwrite:
         raise FileExistsError("Output exists. Pass --overwrite explicitly to replace it.")
 
-    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     random.seed(args.seed)
-    corpus_hash = sha256_file(corpus)
-    expected_hash = expected_corpus_hash(args.corpus_manifest, corpus)
-    if expected_hash and corpus_hash != expected_hash:
-        raise ValueError(
-            f"Corpus SHA-256 mismatch: manifest={expected_hash}, actual={corpus_hash}"
-        )
+    corpus_hash = verify_corpus(corpus, args.corpus_manifest)
+    corpus_manifest_hash = sha256_file(args.corpus_manifest)
 
     tokenizer = Tokenizer(BPE(unk_token="<|unk|>", byte_fallback=True))
     tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False, use_regex=True)
@@ -131,19 +113,25 @@ def main() -> int:
         vocab_size=args.vocab_size,
         min_frequency=args.min_frequency,
         special_tokens=SPECIAL_TOKENS,
-        initial_alphabet=ByteLevel.alphabet(),
+        initial_alphabet=sorted(ByteLevel.alphabet()),
         show_progress=True,
     )
     batches = CorpusBatches(corpus, args.batch_size, args.max_docs)
     started = time.perf_counter()
     tokenizer.train_from_iterator(iter(batches), trainer=trainer, length=args.max_docs)
     elapsed = time.perf_counter() - started
+    if not batches.documents or not batches.characters:
+        raise ValueError("Training corpus contains no text")
+    if sha256_file(corpus) != corpus_hash or sha256_file(args.corpus_manifest) != corpus_manifest_hash:
+        raise ValueError("Corpus or corpus manifest changed during training")
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    tokenizer.save(str(output))
+    # Stable JSON key order removes serialization-only differences from the hash.
+    output.write_text(json.dumps(json.loads(tokenizer.to_str()), ensure_ascii=False,
+                                 sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
     artifact_hash = sha256_file(output)
     training_manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact": {
             "path": output.name,
             "sha256": artifact_hash,
@@ -161,7 +149,8 @@ def main() -> int:
         "corpus": {
             "path": str(corpus),
             "sha256": corpus_hash,
-            "manifest": str(args.corpus_manifest.resolve()) if args.corpus_manifest else None,
+            "manifest": str(args.corpus_manifest.resolve()),
+            "manifest_sha256": corpus_manifest_hash,
             "documents": batches.documents,
             "characters": batches.characters,
             "text_utf8_bytes": batches.text_utf8_bytes,
@@ -177,7 +166,10 @@ def main() -> int:
         },
         "command": [sys.executable, *sys.argv],
         "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "trainer_sha256": sha256_file(Path(__file__)),
+        "provenance_code_sha256": sha256_file(Path(__file__).with_name("tokenizer_provenance.py")),
     }
+    training_manifest["reproducibility_key"] = object_hash(reproducibility_inputs(training_manifest))
     manifest_output.write_text(
         json.dumps(training_manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -188,4 +180,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
