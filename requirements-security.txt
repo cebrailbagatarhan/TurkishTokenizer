@@ -1,0 +1,3 @@
+# Small, fixed direct dependency set for offline regression tests.
+tokenizers==0.22.2
+huggingface-hub==0.34.4
