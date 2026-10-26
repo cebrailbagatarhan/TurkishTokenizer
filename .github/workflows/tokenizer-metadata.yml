@@ -1,0 +1,22 @@
+name: Tokenizer metadata tests
+on:
+  push:
+    paths:
+      - 'tokenizer_metadata.py'
+      - 'test_tokenizer_metadata.py'
+      - '.github/workflows/tokenizer-metadata.yml'
+  pull_request:
+    paths:
+      - 'tokenizer_metadata.py'
+      - 'test_tokenizer_metadata.py'
+      - '.github/workflows/tokenizer-metadata.yml'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest -v test_tokenizer_metadata.py
+      - run: python -m py_compile tokenizer_metadata.py test_tokenizer_metadata.py
