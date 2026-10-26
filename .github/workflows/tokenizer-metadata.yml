@@ -20,3 +20,4 @@ jobs:
           python-version: '3.11'
       - run: python -m unittest -v test_tokenizer_metadata.py
       - run: python -m py_compile tokenizer_metadata.py test_tokenizer_metadata.py
+      - run: python tokenizer_metadata.py --model turkish_tokenizer.json --json
