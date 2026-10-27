@@ -1,0 +1,30 @@
+name: Tokenizer integrity and regression
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-security.txt
+      - run: python -m unittest discover -s tests -v
+        env:
+          HF_HUB_OFFLINE: '1'
+          TOKENIZERS_PARALLELISM: 'false'
+          TOKENIZER_TEST_EVIDENCE_DIR: test-evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tokenizer-evidence-${{ matrix.os }}
+          path: test-evidence/*.json
+          if-no-files-found: warn

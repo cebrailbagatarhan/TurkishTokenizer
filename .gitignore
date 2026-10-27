@@ -7,3 +7,8 @@ venv/
 !.env.example
 *.pem
 .huggingface/
+
+# Generated corpora, tokenizers, and benchmark output
+data/
+artifacts/
+benchmark-results/
