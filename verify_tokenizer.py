@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from importlib.metadata import version
 from pathlib import Path
 
 from tokenizers import Tokenizer
@@ -37,15 +38,17 @@ def regression_report(tokenizer: Tokenizer) -> dict:
         second = restored.encode(text, add_special_tokens=False)
         roundtrip = tokenizer.decode(first.ids, skip_special_tokens=False) == text
         stable = first.ids == second.ids and first.offsets == second.offsets
+        covered = all(any(a <= i < b for a, b in first.offsets) for i in range(len(text)))
         start = text.find(pattern)
         end = start + len(pattern)
         count = sum(b > start and a < end for a, b in first.offsets) if pattern else 0
         results.append({
             "case": name, "roundtrip": roundtrip, "stable_encoding": stable,
+            "offsets_cover_text": covered,
             "tokens": len(first.ids), "pattern_tokens": count,
             "pattern_fragmented": count > 1,
         })
-        if not roundtrip or not stable:
+        if not roundtrip or not stable or not covered:
             failures.append(name)
     return {"cases_sha256": object_hash(CASES), "cases": results, "failures": failures}
 
@@ -58,7 +61,7 @@ def verify_release(tokenizer_path: Path, manifest_path: Path, corpus: Path,
     manifest = verify_artifact(tokenizer_path, manifest_path, corpus, corpus_manifest)
     repeated = False
     if repeat_tokenizer is not None:
-        if repeat_tokenizer.resolve() == tokenizer_path.resolve() or repeat_manifest.resolve() == manifest_path.resolve():
+        if repeat_tokenizer.samefile(tokenizer_path) or repeat_manifest.samefile(manifest_path):
             raise ValueError("Repeat run must use separate artifact and manifest paths")
         repeat = verify_artifact(repeat_tokenizer, repeat_manifest, corpus, corpus_manifest)
         if repeat["reproducibility_key"] != manifest["reproducibility_key"]:
@@ -66,9 +69,14 @@ def verify_release(tokenizer_path: Path, manifest_path: Path, corpus: Path,
         if repeat["artifact"]["sha256"] != manifest["artifact"]["sha256"]:
             raise ValueError("Repeated training produced a different tokenizer SHA-256")
         repeated = True
+    if manifest["environment"]["tokenizers"] != version("tokenizers"):
+        raise ValueError("Validation must use the recorded tokenizers package version")
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
     if tokenizer.get_vocab_size(with_added_tokens=True) != manifest["artifact"]["actual_vocab_size"]:
         raise ValueError("Vocabulary size differs from training manifest")
+    for index, token in enumerate(manifest["tokenizer"]["special_tokens"]):
+        if tokenizer.token_to_id(token) != index:
+            raise ValueError("Special token IDs differ from the training configuration")
     regression = regression_report(tokenizer)
     status = "deny" if regression["failures"] else ("pass" if repeated else "incomplete")
     return {
@@ -76,6 +84,10 @@ def verify_release(tokenizer_path: Path, manifest_path: Path, corpus: Path,
         "artifact_sha256": sha256_file(tokenizer_path),
         "training_manifest_sha256": sha256_file(manifest_path),
         "corpus_manifest_sha256": sha256_file(corpus_manifest),
+        "corpus_sha256": sha256_file(corpus),
+        "repeat_manifest_sha256": sha256_file(repeat_manifest) if repeated else None,
+        "verifier_sha256": sha256_file(Path(__file__)),
+        "tokenizers_version": version("tokenizers"),
         "reproducibility_key": manifest["reproducibility_key"],
         "repeat_training_verified": repeated, "regression": regression,
     }

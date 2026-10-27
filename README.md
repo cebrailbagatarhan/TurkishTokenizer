@@ -61,6 +61,10 @@ python prepare_corpus.py \
 
 Manifest; resolved dataset SHA, seed, belge/karakter/byte sayıları ve iki dosyanın SHA-256 hash'ini içerir. Farklı vocabulary eğitimleri aynı `train.jsonl` dosyasını kullanmalıdır.
 
+Hazırlama sırasında tam olarak aynı UTF-8 metne sahip belgeler iki split arasında
+ortak bir hash kümesiyle elenir; atlanan tekrar sayıları manifeste yazılır.
+Bu kontrol yakın kopyaları veya anlamsal benzerliği tespit etmez.
+
 ## 2. 32K, 64K ve 128K modelleri eğit
 
 ```bash
@@ -76,72 +80,6 @@ Her komut tokenizer JSON'unun yanında bir eğitim manifesti üretir. Varsayıla
 - `artifacts/turkish_bpe_128000.json`
 
 Script sabit süre tahmini yazmaz; gerçek eğitim süresini, corpus hash'ini ve gerçek vocabulary boyutunu kaydeder.
-
-## Tokenizer yayın doğrulaması
-
-Eğitim için `--corpus-manifest` zorunludur. Eğitim yalnız manifestteki `train`
-splitini kabul eder; eksik/geçersiz hash, farklı corpus veya eğitim sırasında
-değişen girdiler işlemi durdurur. Eğitim manifestinin v2 şeması tokenizer,
-corpus, corpus manifesti ve eğitim kodunun hash'lerini birbirine bağlar.
-
-Aynı corpus ve manifestle, aynı parametreler ve Python/tokenizers sürümleriyle
-ikinci kez eğitim çalıştırın. İlk ve ikinci çalışmayı ayrı dizinlerde tutun:
-
-```bash
-python train_turkish_tokenizer.py --corpus data/turkish-wikipedia/train.jsonl --corpus-manifest data/turkish-wikipedia/manifest.json --vocab-size 32000 --output artifacts/run-a/tokenizer.json
-python train_turkish_tokenizer.py --corpus data/turkish-wikipedia/train.jsonl --corpus-manifest data/turkish-wikipedia/manifest.json --vocab-size 32000 --output artifacts/run-b/tokenizer.json
-python verify_tokenizer.py \
-  --tokenizer artifacts/run-a/tokenizer.json \
-  --manifest artifacts/run-a/tokenizer.manifest.json \
-  --repeat-tokenizer artifacts/run-b/tokenizer.json \
-  --repeat-manifest artifacts/run-b/tokenizer.manifest.json \
-  --corpus data/turkish-wikipedia/train.jsonl \
-  --corpus-manifest data/turkish-wikipedia/manifest.json \
-  --output artifacts/release-evidence.json
-```
-
-Kontrol; iki tokenizer dosyasının SHA-256 eşitliğini, eğitim girdilerinin
-eşleşmesini, Türkçe Unicode, bozuk JSON, yarım kod, kontrol karakterleri,
-özel token metni ve sentetik secret örneklerinin encode/decode sonucunu sınar.
-Örüntünün kaç tokena bölündüğü JSON raporuna yazılır; BPE'de parçalanma tek
-başına hata veya secret sızıntısı sayılmaz. Gerçek credential kullanılmaz.
-İkinci çalışma eksikse sonuç `incomplete`, doğrulama başarısızsa `deny` olur;
-her iki durumda da komut sıfırdan farklı çıkış kodu döndürür.
-
-Yükleme komutu da aynı kontrolleri ağ işleminden önce çalıştırır. Önce kuru
-çalıştırma yapın; yayımlama için `--dry-run` seçeneğini kaldırın:
-
-```bash
-python upload_to_hf.py --repo-id OWNER/MODEL \
-  --tokenizer artifacts/run-a/tokenizer.json \
-  --manifest artifacts/run-a/tokenizer.manifest.json \
-  --repeat-tokenizer artifacts/run-b/tokenizer.json \
-  --repeat-manifest artifacts/run-b/tokenizer.manifest.json \
-  --corpus data/turkish-wikipedia/train.jsonl \
-  --corpus-manifest data/turkish-wikipedia/manifest.json --dry-run
-```
-
-Tokenizer, iki manifest, README ve kontrol raporu tek Hub commitinde yüklenir;
-corpus metni yüklenmez. Hata halinde aday yayımlanmaz. Geri dönüş için son
-doğrulanmış Hub commitini sabitleyin ve o committeki tokenizer ile manifest
-paketini birlikte kullanın. Manifesti olmayan kök artifact yayın kontrolünden
-geçmez; kaynak corpus ile yeniden eğitilmelidir.
-
-Bu kontrol imza veya güvenilir bir bağımsız eğitim kanıtı sağlamaz: bir dosyanın
-kopyası ikinci eğitim gibi sunulabilir. İki eğitimi güvenilen bir CI/operatör
-çalıştırmalı, kanıt paketini saklamalıdır. Hash kontrolü, güvenilmeyen bir kişinin
-artifact ile manifesti birlikte değiştirmesini tek başına engellemez. Aynı
-dosya hash'i farklı paket sürümleri veya platformlar arasında vaat edilmez.
-
-Çevrimdışı testler küçük sentetik corpus kullanır; 32K/64K/128K kalite veya
-performans benchmark'ı yerine geçmez:
-
-```bash
-python -m pip install -r requirements-security.txt
-python -m unittest discover -s tests -v
-```
-
-CI aynı testleri Linux ve Windows üzerinde çalıştırır.
 
 ## 3. Yerel ve Hugging Face tokenizer'larını karşılaştır
 
@@ -173,6 +111,65 @@ Bu repoya henüz aynı held-out corpus, aynı makine ve aynı protokolle alınm�
 
 Bu tablo yalnızca `benchmark-results` altındaki ham JSON sonucu da PR'a eklendiğinde doldurulmalıdır.
 
+## Artifact doğrulama ve yayın kapısı
+
+Eğitim için corpus manifesti zorunludur. Eksik hash, değişmiş corpus veya benchmark
+splitinin eğitim girdisi olarak verilmesi hata üretir. Schema 2 eğitim manifesti;
+artifact, corpus, corpus manifesti, eğitim kodu, doğrulama kodu, parametreler ve paket
+sürümlerini birbirine bağlar. Timestamp, süre ve yerel dosya yolları eğitim tarifinin
+hash'ine katılmaz; corpus manifestinin dosya hash'i ayrıca sabittir.
+
+Aynı corpus dosyalarını, manifesti, parametreleri ve Python/paket sürümlerini kullanarak
+ikinci bir eğitim yapın. Farklı vocabulary boyutları için bu kontrol ayrı uygulanır.
+
+```bash
+python -m pip install -r requirements-security.txt
+python train_turkish_tokenizer.py --corpus data/turkish-wikipedia/train.jsonl --corpus-manifest data/turkish-wikipedia/manifest.json --vocab-size 32000 --output artifacts/run-a.json
+python train_turkish_tokenizer.py --corpus data/turkish-wikipedia/train.jsonl --corpus-manifest data/turkish-wikipedia/manifest.json --vocab-size 32000 --output artifacts/run-b.json
+python verify_tokenizer.py \
+  --tokenizer artifacts/run-a.json --manifest artifacts/run-a.manifest.json \
+  --corpus data/turkish-wikipedia/train.jsonl \
+  --corpus-manifest data/turkish-wikipedia/manifest.json \
+  --repeat-tokenizer artifacts/run-b.json --repeat-manifest artifacts/run-b.manifest.json \
+  --output artifacts/release-evidence.json
+```
+
+`pass` için iki ayrı eğitimin tokenizer dosyaları byte düzeyinde aynı olmalı;
+bozuk JSON, eksik kod, Türkçe/Unicode, kontrol karakterleri, özel tokenlar ve sentetik
+secret kalıpları kayıpsız encode/decode edilmelidir. Rapor kalıpların kaç tokena
+bölündüğünü gösterir. Parçalanma tek başına güvenlik açığı sayılmaz. Tokenizer bir
+secret filtresi değildir. İkinci eğitim verilmezse sonuç `incomplete`, başarısızlıkta
+`deny` olur ve CLI sıfırdan farklı kodla çıkar.
+
+Yükleme de aynı kontrolleri yeniden çalıştırır. Önce ağ erişimi yapmadan kontrol edin:
+
+```bash
+python upload_to_hf.py --repo-id OWNER/MODEL \
+  --tokenizer artifacts/run-a.json --manifest artifacts/run-a.manifest.json \
+  --corpus data/turkish-wikipedia/train.jsonl \
+  --corpus-manifest data/turkish-wikipedia/manifest.json \
+  --repeat-tokenizer artifacts/run-b.json --repeat-manifest artifacts/run-b.manifest.json \
+  --dry-run
+```
+
+Yayın zamanı `--dry-run` kaldırılır. Tokenizer, manifestler, README ve kanıt raporu
+tek Hub commit'iyle yüklenir. Ham corpus yüklenmez. SHA-256 kayıtları dosya
+bütünlüğünü doğrular; güvenilmeyen bir manifestin kimliğini doğrulamaz veya imza
+yerine geçmez. Başarısız kontrolde yeni artifact yayımlanmaz; son doğrulanmış Hub
+commit'i/tokenizer hash'i sabitlenerek önceki sürüm kullanılabilir.
+
+## Regresyon testleri
+
+```bash
+python -m pip install -r requirements-security.txt
+python -m unittest discover -s tests -v
+```
+
+CI, Ubuntu ve Windows üzerinde küçük sentetik corpus ile iki ayrı Python sürecinde
+eğitim, bozulmuş artifact/manifest, geçersiz JSONL, veri kaybı ve yayın öncesi red
+durumlarını sınar; JSON kanıtını workflow artifact'i olarak saklar. Bu testler
+üretim corpus'u üzerinde kalite veya 32K/64K/128K üstünlük ölçümü değildir.
+
 ## Tekrar üretilebilirlik kuralları
 
 - Dataset adı yeterli değildir; resolved dataset commit SHA raporlanır.
@@ -191,6 +188,8 @@ Bu tablo yalnızca `benchmark-results` altındaki ham JSON sonucu da PR'a eklend
 | `train_turkish_tokenizer.py` | İstenen vocabulary boyutunda BPE eğitir ve manifest yazar |
 | `benchmark_tokenizers.py` | Yerel, Qwen ve Llama tokenizer ölçümlerini üretir |
 | `upload_to_hf.py` | Açıkça seçilen artifact'leri güvenli kimlik doğrulamayla yükler |
+| `tokenizer_provenance.py` | Corpus, artifact ve eğitim tarifi hash'lerini doğrular |
+| `verify_tokenizer.py` | Tekrar eğitim ve sentetik regresyonlar için JSON kanıtı üretir |
 | `turkish_tokenizer.json` | Manifesti olmayan legacy 128K artifact |
 
 ## Sınırlamalar

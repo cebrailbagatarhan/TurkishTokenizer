@@ -1,3 +1,4 @@
+import copy
 import io
 import json
 import os
@@ -10,7 +11,7 @@ from unittest.mock import patch
 
 from tokenizers import Tokenizer, normalizers
 
-from tokenizer_provenance import object_hash, reproducibility_inputs, sha256_file, verify_corpus
+from tokenizer_provenance import object_hash, reproducibility_inputs, sha256_file, verify_corpus, verify_artifact
 from train_turkish_tokenizer import CorpusBatches
 from verify_tokenizer import regression_report, verify_release
 import upload_to_hf
@@ -30,13 +31,12 @@ class ReleaseTests(unittest.TestCase):
                    "evlerimizden kitaplarımızı getirdik", '{"kod": true, "sayı": 42}'] * 8
         cls.corpus.write_text("".join(json.dumps({"text": t}, ensure_ascii=False) + "\n"
                                       for t in samples), encoding="utf-8")
-        cls.benchmark = cls.root / "benchmark.jsonl"
-        cls.benchmark.write_text('{"text":"Ayrı değerlendirme örneği"}\n', encoding="utf-8")
         cls.corpus_manifest = cls.root / "corpus-manifest.json"
         cls.corpus_manifest.write_text(json.dumps({
             "schema_version": 1, "dataset": {"kind": "synthetic test fixture"},
-            "splits": {"train": {"path": "train.jsonl", "sha256": sha256_file(cls.corpus)},
-                       "benchmark": {"path": "benchmark.jsonl", "sha256": sha256_file(cls.benchmark)}}
+            "splits": {
+                "train": {"path": "train.jsonl", "sha256": sha256_file(cls.corpus)},
+                "benchmark": {"path": "benchmark.jsonl", "sha256": "a" * 64}}
         }), encoding="utf-8")
         cls.artifacts = []
         for index in range(2):
@@ -73,7 +73,12 @@ class ReleaseTests(unittest.TestCase):
 
     def test_two_independent_training_processes_are_byte_identical(self):
         self.assertEqual(self.artifacts[0].read_bytes(), self.artifacts[1].read_bytes())
-        self.assertEqual(self.verify()["status"], "pass")
+        report = self.verify()
+        self.assertEqual(report["status"], "pass")
+        if os.environ.get("TOKENIZER_TEST_EVIDENCE_DIR"):
+            path = Path(os.environ["TOKENIZER_TEST_EVIDENCE_DIR"])
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "release-evidence.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def test_missing_repeat_is_incomplete(self):
         self.assertEqual(self.verify(repeat_tokenizer=None, repeat_manifest=None)["status"], "incomplete")
@@ -132,9 +137,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_missing_train_hash_does_not_skip_validation(self):
         path = self.root / "missing-hash.json"
-        value = json.loads(self.corpus_manifest.read_text())
-        value["splits"]["train"].pop("sha256")
-        path.write_text(json.dumps(value))
+        path.write_text(json.dumps({"schema_version": 1, "splits": {"train": {"path": "train.jsonl"}}}))
         with self.assertRaisesRegex(ValueError, "SHA-256"):
             verify_corpus(self.corpus, path)
 

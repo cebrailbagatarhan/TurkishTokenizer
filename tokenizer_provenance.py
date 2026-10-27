@@ -46,13 +46,13 @@ def verify_corpus(corpus: Path, manifest_path: Path) -> str:
     train = splits.get("train") if isinstance(splits, dict) else None
     if not isinstance(train, dict) or train.get("path") != corpus.name:
         raise ValueError("Corpus must match the manifest's train split")
+    expected = require_hash(train.get("sha256"), "train split")
     benchmark = splits.get("benchmark")
     if not isinstance(benchmark, dict) or benchmark.get("path") == train.get("path"):
         raise ValueError("Corpus manifest requires a separate benchmark split")
     require_hash(benchmark.get("sha256"), "benchmark split")
     if benchmark["sha256"] == train.get("sha256"):
         raise ValueError("Train and benchmark corpora must differ")
-    expected = require_hash(train.get("sha256"), "train split")
     actual = sha256_file(corpus)
     if actual != expected:
         raise ValueError("Corpus SHA-256 mismatch")
