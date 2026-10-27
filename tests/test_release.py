@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from tokenizers import Tokenizer, normalizers
 
-from tokenizer_provenance import sha256_file, verify_corpus, verify_artifact
+from tokenizer_provenance import object_hash, reproducibility_inputs, sha256_file, verify_corpus, verify_artifact
 from train_turkish_tokenizer import CorpusBatches
 from verify_tokenizer import regression_report, verify_release
 import upload_to_hf
@@ -82,6 +82,21 @@ class ReleaseTests(unittest.TestCase):
 
     def test_missing_repeat_is_incomplete(self):
         self.assertEqual(self.verify(repeat_tokenizer=None, repeat_manifest=None)["status"], "incomplete")
+
+    def test_repeat_with_different_inputs_is_rejected(self):
+        def mutate(value):
+            value["seed"] += 1
+            value["reproducibility_key"] = object_hash(reproducibility_inputs(value))
+        path = self.changed_manifest(mutate)
+        with self.assertRaisesRegex(ValueError, "different training inputs"):
+            self.verify(repeat_manifest=path)
+
+    def test_repeat_with_valid_manifest_but_different_bytes_is_rejected(self):
+        artifact = self.root / "different-repeat.json"
+        artifact.write_bytes(self.artifacts[1].read_bytes() + b" ")
+        path = self.changed_manifest(lambda m: m["artifact"].update(sha256=sha256_file(artifact)))
+        with self.assertRaisesRegex(ValueError, "different tokenizer SHA-256"):
+            self.verify(repeat_tokenizer=artifact, repeat_manifest=path)
 
     def test_same_paths_do_not_count_as_repeat(self):
         with self.assertRaisesRegex(ValueError, "separate"):
