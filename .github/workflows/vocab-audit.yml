@@ -1,0 +1,26 @@
+name: BPE vocabulary audit
+
+on:
+  pull_request:
+    paths:
+      - 'vocab_audit.py'
+      - 'test_vocab_audit.py'
+      - '.github/workflows/vocab-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Unit tests
+        run: python -m unittest -v test_vocab_audit.py
+      - name: Compile
+        run: python -m py_compile vocab_audit.py test_vocab_audit.py
+      - name: Audit checked-in tokenizer
+        run: python vocab_audit.py turkish_tokenizer.json --json
