@@ -22,6 +22,8 @@ jobs:
           HF_HUB_OFFLINE: '1'
           TOKENIZERS_PARALLELISM: 'false'
           TOKENIZER_TEST_EVIDENCE_DIR: test-evidence
+      - name: Audit corpus split unit tests
+        run: python -m unittest -v test_audit_corpus_splits.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
