@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,6 +42,21 @@ class InspectTokenizerTests(unittest.TestCase):
                 self.assertEqual(inspect_tokenizer.main(["abc", "--model", str(model)]), 0)
             self.assertIn("Token IDs: [42]", output.getvalue())
             self.assertIn("Decoded: abc", output.getvalue())
+
+    def test_json_output_preserves_turkish_unicode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "tokenizer.json"
+            model.write_text("{}", encoding="utf-8")
+            output = io.StringIO()
+            with patch.object(inspect_tokenizer, "inspect_text", return_value=(["İs", "tanbul"], [5, 6], "İstanbul")), contextlib.redirect_stdout(output):
+                self.assertEqual(inspect_tokenizer.main(["İstanbul", "--json", "--model", str(model)]), 0)
+            self.assertEqual(json.loads(output.getvalue()), {
+                "token_count": 2,
+                "tokens": ["İs", "tanbul"],
+                "token_ids": [5, 6],
+                "decoded": "İstanbul",
+            })
+            self.assertIn("İstanbul", output.getvalue())
 
     def test_missing_model_is_rejected(self):
         with contextlib.redirect_stderr(io.StringIO()):
