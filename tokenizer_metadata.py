@@ -35,21 +35,37 @@ def summarize(path: Path) -> dict[str, object]:
     }
 
 
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("Minimum vocabulary size must be a positive integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("Minimum vocabulary size must be a positive integer")
+    return parsed
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Show offline tokenizer metadata without loading the tokenizers library")
     parser.add_argument("--model", type=Path, default=Path(__file__).resolve().parent / "turkish_tokenizer.json")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    parser.add_argument("--min-vocab-size", type=positive_int, metavar="N",
+                        help="Exit with status 1 if the model has fewer than N vocabulary entries")
     args = parser.parse_args(argv)
     try:
         summary = summarize(args.model)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         parser.error(str(error))
+    meets_minimum = args.min_vocab_size is None or summary["vocabulary_size"] >= args.min_vocab_size
+    if args.min_vocab_size is not None:
+        summary["minimum_vocabulary_size"] = args.min_vocab_size
+        summary["meets_minimum_vocabulary_size"] = meets_minimum
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
         for key, value in summary.items():
             print(f"{key}: {value if value is not None else 'n/a'}")
-    return 0
+    return 0 if meets_minimum else 1
 
 
 if __name__ == "__main__":
