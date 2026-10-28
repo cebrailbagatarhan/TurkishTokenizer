@@ -57,6 +57,29 @@ class MetadataTests(unittest.TestCase):
                 main(["--model", str(self.path)])
         self.assertEqual(exit_info.exception.code, 2)
 
+    def test_minimum_vocabulary_size_passes_at_exact_threshold(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["--model", str(self.path), "--min-vocab-size", "2", "--json"]), 0)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["minimum_vocabulary_size"], 2)
+        self.assertTrue(report["meets_minimum_vocabulary_size"])
+
+    def test_minimum_vocabulary_size_fails_with_exit_one(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["--model", str(self.path), "--min-vocab-size", "3", "--json"]), 1)
+        report = json.loads(output.getvalue())
+        self.assertFalse(report["meets_minimum_vocabulary_size"])
+        self.assertNotIn("merhaba", output.getvalue())
+
+    def test_invalid_minimum_vocabulary_size_is_rejected(self):
+        for value in ["0", "-1", "1.5", "abc"]:
+            with self.subTest(value=value), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as exit_info:
+                    main(["--model", str(self.path), "--min-vocab-size", value])
+            self.assertEqual(exit_info.exception.code, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
