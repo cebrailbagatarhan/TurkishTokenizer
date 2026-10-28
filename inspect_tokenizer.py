@@ -1,6 +1,7 @@
 """Inspect a trained Turkish BPE tokenizer from the command line."""
 
 import argparse
+import json
 from pathlib import Path
 
 
@@ -17,6 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Inspect Turkish tokenizer output")
     parser.add_argument("text", help="Text to tokenize")
     parser.add_argument("--model", default="turkish_tokenizer.json", help="Tokenizer JSON path")
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     args = parser.parse_args(argv)
     if not Path(args.model).is_file():
         parser.error(f"Tokenizer file not found: {args.model}")
@@ -24,9 +26,12 @@ def main(argv: list[str] | None = None) -> int:
         tokens, ids, decoded = inspect_text(args.model, args.text)
     except (OSError, ValueError) as exc:
         parser.exit(1, f"Unable to load or use tokenizer: {exc}\n")
-    print(f"Tokens ({len(tokens)}): {tokens}")
-    print(f"Token IDs: {ids}")
-    print(f"Decoded: {decoded}")
+    if args.json:
+        print(json.dumps({"token_count": len(tokens), "tokens": tokens, "token_ids": ids, "decoded": decoded}, ensure_ascii=False))
+    else:
+        print(f"Tokens ({len(tokens)}): {tokens}")
+        print(f"Token IDs: {ids}")
+        print(f"Decoded: {decoded}")
     return 0
 
 
